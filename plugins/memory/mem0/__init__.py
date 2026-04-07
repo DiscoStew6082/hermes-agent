@@ -29,7 +29,6 @@ import logging
 import os
 import threading
 import time
-from pathlib import Path
 from typing import Any, Dict, List
 
 from hermes_constants import get_hermes_home

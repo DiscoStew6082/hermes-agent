@@ -70,7 +70,7 @@ _COMMAND_SPINNER_FRAMES = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧
 
 # Load .env from ~/.hermes/.env first, then project root as dev fallback.
 # User-managed env files should override stale shell exports on restart.
-from hermes_constants import get_hermes_home, display_hermes_home, OPENROUTER_BASE_URL
+from hermes_constants import get_hermes_home, display_hermes_home
 from hermes_cli.env_loader import load_hermes_dotenv
 
 _hermes_home = get_hermes_home()
@@ -4278,7 +4278,6 @@ class HermesCLI:
         
         try:
             config = load_gateway_config()
-            connected = config.get_connected_platforms()
             
             print("  Messaging Platform Configuration:")
             print("  " + "-" * 55)
@@ -6040,7 +6039,7 @@ class HermesCLI:
 
         timeout = CLI_CONFIG.get("clarify", {}).get("timeout", 120)
         response_queue = queue.Queue()
-        is_open_ended = not choices or len(choices) == 0
+        is_open_ended = not choices
 
         self._clarify_state = {
             "question": question,
@@ -7871,7 +7870,6 @@ class HermesCLI:
             title = '🔐 Sudo Password Required'
             body = 'Enter password below (hidden), or press Enter to skip'
             box_width = _panel_box_width(title, [body])
-            inner = max(0, box_width - 2)
             lines = []
             lines.append(('class:sudo-border', '╭─ '))
             lines.append(('class:sudo-title', title))
