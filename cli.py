@@ -3583,18 +3583,30 @@ class HermesCLI:
             # Show authenticated providers with top models
             try:
                 # Load user providers from config
-                user_provs = None
+                user_provs = {}
                 try:
                     from hermes_cli.config import load_config
                     cfg = load_config()
-                    user_provs = cfg.get("providers")
+                    # Merge both providers and custom_providers into one dict
+                    if isinstance(cfg.get("providers"), dict):
+                        user_provs.update(cfg["providers"])
+                    custom_provs = cfg.get("custom_providers", [])
+                    if isinstance(custom_provs, list):
+                        for cp in custom_provs:
+                            if isinstance(cp, dict) and cp.get("name"):
+                                # Use lowercase name as key - this works for both
+                                # --provider LMS lookup AND menu display (which strips "custom:" prefix)
+                                user_provs[cp["name"].lower()] = {
+                                    "api": cp.get("base_url", ""),
+                                    "default_model": cp.get("model", ""),
+                                }
                 except Exception:
                     pass
 
                 providers = list_authenticated_providers(
                     current_provider=self.provider or "",
                     user_providers=user_provs,
-                    max_models=6,
+                    max_models=25,  # Show more models for custom endpoints
                 )
                 if providers:
                     for p in providers:
@@ -3625,6 +3637,25 @@ class HermesCLI:
             _cprint("  /model <name> --global               persist to config")
             return
 
+        # Build user_provs dict for switch_model (needed for custom endpoints)
+        user_provs_for_switch = {}
+        try:
+            from hermes_cli.config import load_config
+            cfg = load_config()
+            if isinstance(cfg.get("providers"), dict):
+                user_provs_for_switch.update(cfg["providers"])
+            custom_provs = cfg.get("custom_providers", [])
+            if isinstance(custom_provs, list):
+                for cp in custom_provs:
+                    if isinstance(cp, dict) and cp.get("name"):
+                        # Use lowercase name as key - works for both --provider LMS and menu
+                        user_provs_for_switch[cp["name"].lower()] = {
+                            "api": cp.get("base_url", ""),
+                            "default_model": cp.get("model", ""),
+                        }
+        except Exception:
+            pass
+
         # Perform the switch
         result = switch_model(
             raw_input=model_input,
@@ -3634,6 +3665,7 @@ class HermesCLI:
             current_api_key=self.api_key or "",
             is_global=persist_global,
             explicit_provider=explicit_provider,
+            user_providers=user_provs_for_switch,
         )
 
         if not result.success:

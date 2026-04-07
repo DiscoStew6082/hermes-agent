@@ -21,22 +21,17 @@ OpenRouter variant suffixes (``:free``, ``:extended``, ``:fast``).
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import List, NamedTuple, Optional
 
+from hermes_cli.models import fetch_api_models
 from hermes_cli.providers import (
-    ALIASES,
-    LABELS,
-    TRANSPORT_TO_API_MODE,
     determine_api_mode,
     get_label,
-    get_provider,
     is_aggregator,
-    normalize_provider,
     resolve_provider_full,
 )
 from hermes_cli.model_normalize import (
-    detect_vendor,
     normalize_model_for_provider,
 )
 from agent.models_dev import (
@@ -574,15 +569,15 @@ def switch_model(
 
         # --- Step e: detect_provider_for_model() as last resort ---
         _base = current_base_url or ""
-        is_custom = current_provider in ("custom", "local") or (
-            "localhost" in _base or "127.0.0.1" in _base
+        is_current_local = (
+            current_provider in ("custom", "local", "lms")
+            or "localhost" in _base
+            or "127.0.0.1" in _base
         )
 
-        if (
-            target_provider == current_provider
-            and not is_custom
-            and not resolved_alias
-        ):
+        # Skip auto-detection entirely when on any local provider (LMS/Ollama/etc)
+        # to prevent unwanted switches to OpenRouter for models that exist locally
+        if not is_current_local:
             detected = detect_provider_for_model(new_model, current_provider)
             if detected:
                 target_provider, new_model = detected
@@ -602,6 +597,7 @@ def switch_model(
     if provider_changed or explicit_provider:
         try:
             runtime = resolve_runtime_provider(requested=target_provider)
+            logger.debug("Resolved runtime for target_provider=%s: %s", target_provider, runtime.get('base_url'))
             api_key = runtime.get("api_key", "")
             base_url = runtime.get("base_url", "")
             api_mode = runtime.get("api_mode", "")
@@ -827,7 +823,9 @@ def list_authenticated_providers(
         for ep_name, ep_cfg in user_providers.items():
             if not isinstance(ep_cfg, dict):
                 continue
-            display_name = ep_cfg.get("name", "") or ep_name
+            # Strip "custom:" prefix for display (keep full key for internal use)
+            slug_for_display = ep_name.replace("custom:", "") if ep_name.startswith("custom:") else ep_name
+            display_name = ep_cfg.get("name", "") or slug_for_display
             api_url = ep_cfg.get("api", "") or ep_cfg.get("url", "") or ""
             default_model = ep_cfg.get("default_model", "")
 
@@ -835,8 +833,17 @@ def list_authenticated_providers(
             if default_model:
                 models_list.append(default_model)
 
-            # Try to probe /v1/models if URL is set (but don't block on it)
-            # For now just show what we know from config
+            # Probe /v1/models to fetch live model list from the endpoint
+            if api_url:
+                try:
+                    fetched = fetch_api_models(api_key=None, base_url=api_url)
+                    if fetched:
+                        for m in fetched[:max_models]:
+                            if m not in models_list:
+                                models_list.append(m)
+                except Exception as e:
+                    logger.warning("Could not probe %s for models: %s", api_url, e)
+
             results.append({
                 "slug": ep_name,
                 "name": display_name,

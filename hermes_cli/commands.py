@@ -19,6 +19,21 @@ from typing import Any
 from prompt_toolkit.auto_suggest import AutoSuggest, Suggestion
 from prompt_toolkit.completion import Completer, Completion
 
+# Lazy imports for config and model probing (avoids circular deps)
+def _lazy_get_config():
+    from hermes_cli.config import load_config
+
+    return load_config()
+
+
+def _lazy_fetch_models(base_url: str):
+    try:
+        from hermes_cli.models import fetch_api_models
+
+        return fetch_api_models(api_key=None, base_url=base_url) or []
+    except Exception:
+        return []
+
 
 # ---------------------------------------------------------------------------
 # CommandDef dataclass
@@ -868,33 +883,71 @@ class SlashCommandCompleter(Completer):
     def _model_completions(self, sub_text: str, sub_lower: str):
         """Yield completions for /model from config aliases + built-in aliases."""
         seen = set()
-        # Config-based direct aliases (preferred — include provider info)
+
+        # Get current provider to decide which completions to show
         try:
-            from hermes_cli.model_switch import (
-                _ensure_direct_aliases, DIRECT_ALIASES, MODEL_ALIASES,
-            )
-            _ensure_direct_aliases()
-            for name, da in DIRECT_ALIASES.items():
-                if name.startswith(sub_lower) and name != sub_lower:
-                    seen.add(name)
-                    yield Completion(
-                        name,
-                        start_position=-len(sub_text),
-                        display=name,
-                        display_meta=f"{da.model} ({da.provider})",
-                    )
-            # Built-in catalog aliases not already covered
-            for name in sorted(MODEL_ALIASES.keys()):
-                if name in seen:
-                    continue
-                if name.startswith(sub_lower) and name != sub_lower:
-                    identity = MODEL_ALIASES[name]
-                    yield Completion(
-                        name,
-                        start_position=-len(sub_text),
-                        display=name,
-                        display_meta=f"{identity.vendor}/{identity.family}",
-                    )
+            cfg = _lazy_get_config()
+            model_cfg = cfg.get("model", {})
+            current_provider = (model_cfg.get("provider") or "").lower()
+            base_url = model_cfg.get("base_url")
+        except Exception:
+            current_provider = ""
+            base_url = None
+
+        # If using LM Studio (or any local provider), skip catalog aliases and
+        # only show live probed models — prevents OpenRouter clutter.
+        is_local_provider = (
+            current_provider == "lms" or
+            (base_url and ("localhost" in base_url or "127.0.0.1" in base_url))
+        )
+
+        if not is_local_provider:
+            # Config-based direct aliases (preferred — include provider info)
+            try:
+                from hermes_cli.model_switch import (
+                    _ensure_direct_aliases, DIRECT_ALIASES, MODEL_ALIASES,
+                )
+                _ensure_direct_aliases()
+                for name, da in DIRECT_ALIASES.items():
+                    if name.startswith(sub_lower) and name != sub_lower:
+                        seen.add(name)
+                        yield Completion(
+                            name,
+                            start_position=-len(sub_text),
+                            display=name,
+                            display_meta=f"{da.model} ({da.provider})",
+                        )
+                # Built-in catalog aliases not already covered
+                for name in sorted(MODEL_ALIASES.keys()):
+                    if name in seen:
+                        continue
+                    if name.startswith(sub_lower) and name != sub_lower:
+                        identity = MODEL_ALIASES[name]
+                        yield Completion(
+                            name,
+                            start_position=-len(sub_text),
+                            display=name,
+                            display_meta=f"{identity.vendor}/{identity.family}",
+                        )
+            except Exception:
+                pass
+
+        # Dynamic probe: fetch live models from current provider's /v1/models endpoint
+        try:
+            if base_url and "://" in base_url:
+                # Probe the endpoint for available models
+                live_models = _lazy_fetch_models(base_url)
+                for model_id in live_models:
+                    if sub_lower and sub_lower not in model_id.lower():
+                        continue
+                    if model_id not in seen:
+                        seen.add(model_id)
+                        yield Completion(
+                            model_id,
+                            start_position=-len(sub_text),
+                            display=model_id,
+                            display_meta="(LMS)",
+                        )
         except Exception:
             pass
 
