@@ -213,6 +213,7 @@ ALIASES: Dict[str, str] = {
     "huggingface-hub": "huggingface",
 
     # Local server aliases → virtual "local" concept (resolved via user config)
+    "lms": "lmstudio",
     "lmstudio": "lmstudio",
     "lm-studio": "lmstudio",
     "lm_studio": "lmstudio",

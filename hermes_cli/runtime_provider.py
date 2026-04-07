@@ -310,10 +310,9 @@ def _resolve_named_custom_runtime(
     if not base_url:
         return None
 
-    # Check if a credential pool exists for this custom endpoint
-    pool_result = _try_resolve_from_custom_pool(base_url, "custom", custom_provider.get("api_mode"))
-    if pool_result:
-        return pool_result
+    # Skip credential pool lookup when explicit config exists - the user's
+    # custom_providers entry should always take precedence over any stale pools.
+    # This prevents silent overrides from old pool entries (e.g., "custom:lms").
 
     api_key_candidates = [
         (explicit_api_key or "").strip(),
