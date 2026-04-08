@@ -189,6 +189,13 @@ PROVIDER_REGISTRY: Dict[str, ProviderConfig] = {
         api_key_env_vars=("DEEPSEEK_API_KEY",),
         base_url_env_var="DEEPSEEK_BASE_URL",
     ),
+    "lms": ProviderConfig(
+        id="lms",
+        name="LM Studio",
+        auth_type="api_key",
+        inference_base_url="http://localhost:1234/v1",
+        api_key_env_vars=(),
+    ),
     "ai-gateway": ProviderConfig(
         id="ai-gateway",
         name="AI Gateway",
