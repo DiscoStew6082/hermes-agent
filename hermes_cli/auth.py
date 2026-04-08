@@ -204,7 +204,7 @@ PROVIDER_REGISTRY: Dict[str, ProviderConfig] = {
         name="LM Studio",
         auth_type="api_key",
         inference_base_url="http://localhost:1234/v1",
-        api_key_env_vars=(),
+        api_key_env_vars=("LMS_API_KEY",),
     ),
     "ai-gateway": ProviderConfig(
         id="ai-gateway",
