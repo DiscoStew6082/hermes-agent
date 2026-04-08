@@ -62,7 +62,7 @@ class ContextCompressor:
     def __init__(
         self,
         model: str,
-        threshold_percent: float = 0.50,
+        threshold_percent: float = 0.75,  # Increased from 0.50 for better summarization balance
         protect_first_n: int = 3,
         protect_last_n: int = 20,
         summary_target_ratio: float = 0.20,

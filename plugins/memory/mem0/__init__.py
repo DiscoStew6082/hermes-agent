@@ -1,16 +1,25 @@
 """Mem0 memory plugin — MemoryProvider interface.
 
-Server-side LLM fact extraction, semantic search with reranking, and
-automatic deduplication via the Mem0 Platform API.
+Supports two modes:
+1. Platform mode: Uses Mem0 Platform API with server-side LLM extraction
+2. Local/OSS mode: Self-hosted with custom LLM, embedder, and vector store
 
 Original PR #2933 by kartik-mem0, adapted to MemoryProvider ABC.
 
-Config via environment variables:
-  MEM0_API_KEY       — Mem0 Platform API key (required)
+Config via environment variables (Platform mode):
+  MEM0_API_KEY       — Mem0 Platform API key (required for platform mode)
   MEM0_USER_ID       — User identifier (default: hermes-user)
   MEM0_AGENT_ID      — Agent identifier (default: hermes)
 
 Or via $HERMES_HOME/mem0.json.
+
+For Local/OSS mode, configure in mem0.json:
+{
+  "mode": "local",
+  "llm": {"provider": "lmstudio", ...},
+  "embedder": {"provider": "lmstudio", ...},
+  "vector_store": {"provider": "faiss", ...}
+}
 """
 
 from __future__ import annotations
@@ -22,6 +31,8 @@ import threading
 import time
 from pathlib import Path
 from typing import Any, Dict, List
+
+from hermes_constants import get_hermes_home
 
 from agent.memory_provider import MemoryProvider
 
@@ -43,15 +54,28 @@ def _load_config() -> dict:
     Environment variables provide defaults; mem0.json (if present) overrides
     individual keys.  This avoids a silent failure when the JSON file exists
     but is missing fields like ``api_key`` that the user set in ``.env``.
+    
+    Supports both Platform mode and Local/OSS mode:
+    - Platform: requires MEM0_API_KEY, uses MemoryClient
+    - Local: requires mode="local" plus llm/embedder/vector_store config
     """
-    from hermes_constants import get_hermes_home
-
+    # Base config with all possible fields (defaults)
     config = {
+        "mode": os.environ.get("MEM0_MODE", "platform"),
         "api_key": os.environ.get("MEM0_API_KEY", ""),
         "user_id": os.environ.get("MEM0_USER_ID", "hermes-user"),
         "agent_id": os.environ.get("MEM0_AGENT_ID", "hermes"),
         "rerank": True,
         "keyword_search": False,
+        # Local mode defaults
+        "llm_provider": "lmstudio",
+        "llm_model": "google/gemma-4-26b-a4b",
+        "llm_base_url": os.environ.get("LMSTUDIO_BASE_URL", "http://localhost:1234/v1"),
+        "embedder_provider": "lmstudio",
+        "embedder_model": "text-embedding-kalm-embedding-gemma3-12b-2511-i1",
+        "embedder_dims": 3840,
+        "vector_store_provider": "faiss",
+        "vector_store_path": None,  # Will default to HERMES_HOME/mem0_vectors
     }
 
     config_path = get_hermes_home() / "mem0.json"
@@ -117,7 +141,12 @@ CONCLUDE_SCHEMA = {
 # ---------------------------------------------------------------------------
 
 class Mem0MemoryProvider(MemoryProvider):
-    """Mem0 Platform memory with server-side extraction and semantic search."""
+    """Mem0 memory with Platform or Local/OSS mode support.
+
+    Mode detection:
+    - If "mode": "local" in mem0.json → use Memory.from_config (OSS)
+    - Otherwise require MEM0_API_KEY for platform mode
+    """
 
     def __init__(self):
         self._config = None
@@ -127,6 +156,7 @@ class Mem0MemoryProvider(MemoryProvider):
         self._user_id = "hermes-user"
         self._agent_id = "hermes"
         self._rerank = True
+        self._mode = "platform"  # "platform" or "local"
         self._prefetch_result = ""
         self._prefetch_lock = threading.Lock()
         self._prefetch_thread = None
@@ -141,12 +171,19 @@ class Mem0MemoryProvider(MemoryProvider):
 
     def is_available(self) -> bool:
         cfg = _load_config()
+        mode = cfg.get("mode", "")
+        
+        # Local mode: check for flat config keys (llm_provider, embedder_provider)
+        if mode == "local":
+            has_llm = bool(cfg.get("llm_provider") or cfg.get("llm"))
+            has_embedder = bool(cfg.get("embedder_provider") or cfg.get("embedder"))
+            return has_llm and has_embedder
+        
+        # Platform mode: require API key
         return bool(cfg.get("api_key"))
 
     def save_config(self, values, hermes_home):
         """Write config to $HERMES_HOME/mem0.json."""
-        import json
-        from pathlib import Path
         config_path = Path(hermes_home) / "mem0.json"
         existing = {}
         if config_path.exists():
@@ -159,23 +196,98 @@ class Mem0MemoryProvider(MemoryProvider):
 
     def get_config_schema(self):
         return [
+            {"key": "mode", "description": "Mode: platform (API) or local (self-hosted)", "default": "platform", "choices": ["platform", "local"]},
             {"key": "api_key", "description": "Mem0 Platform API key", "secret": True, "required": True, "env_var": "MEM0_API_KEY", "url": "https://app.mem0.ai"},
+            # Platform mode options
             {"key": "user_id", "description": "User identifier", "default": "hermes-user"},
             {"key": "agent_id", "description": "Agent identifier", "default": "hermes"},
             {"key": "rerank", "description": "Enable reranking for recall", "default": "true", "choices": ["true", "false"]},
+            # Local mode options - LLM
+            {"key": "llm_provider", "description": "Local LLM provider (lmstudio, ollama, openai)", "when": {"mode": "local"}},
+            {"key": "llm_model", "description": "LLM model name for fact extraction", "default_from": {"field": "llm_provider", "map": {"lmstudio": "google/gemma-4-26b-a4b", "ollama": "llama3.1:latest", "openai": "gpt-4o-mini"}}},
+            {"key": "llm_base_url", "description": "Base URL for local LLM (e.g., http://localhost:1234/v1)", "default": "http://localhost:1234/v1"},
+            # Local mode options - Embedder
+            {"key": "embedder_provider", "description": "Embedder provider (lmstudio, ollama, openai)", "when": {"mode": "local"}},
+            {"key": "embedder_model", "description": "Embedding model name", "default_from": {"field": "embedder_provider", "map": {"lmstudio": "text-embedding-kalm-embedding-gemma3-12b-2511-i1", "ollama": "nomic-embed-text:latest"}}},
+            {"key": "embedder_dims", "description": "Embedding dimensions", "default_from": {"field": "embedder_model", "map": {"text-embedding-kalm-embedding-gemma3-12b-2511-i1": 3840, "nomic-embed-text:latest": 768}}, "default": 1536},
+            # Local mode options - Vector Store
+            {"key": "vector_store_provider", "description": "Vector store provider (faiss, qdrant, chroma)", "when": {"mode": "local"}, "default": "faiss"},
+            {"key": "vector_store_path", "description": "Path for faiss/chroma storage (defaults to HERMES_HOME/mem0_vectors)", "default": ""},
         ]
 
     def _get_client(self):
-        """Thread-safe client accessor with lazy initialization."""
+        """Thread-safe client accessor with lazy initialization.
+        
+        Platform mode: uses MemoryClient (API-based)
+        Local mode: uses Memory.from_config() (OSS self-hosted)
+        """
         with self._client_lock:
             if self._client is not None:
                 return self._client
+            
             try:
-                from mem0 import MemoryClient
-                self._client = MemoryClient(api_key=self._api_key)
+                from mem0 import Memory
+                
+                if self._mode == "local":
+                    # Build OSS config - matching skill doc format exactly
+                    embedder_dims = int(self._config.get("embedder_dims", 3840))
+                    
+                    config = {
+                        "llm": {
+                            "provider": self._config.get("llm_provider", "lmstudio"),
+                            "config": {
+                                "model": self._config.get("llm_model", "google/gemma-4-26b-a4b"),
+                                "lmstudio_base_url": self._config.get("llm_base_url", "http://localhost:1234/v1"),
+                            }
+                        },
+                        # Note: embedder config structure matches skill doc
+                        "embedder": {
+                            "provider": self._config.get("embedder_provider", "lmstudio"),
+                            "config": {
+                                "model": self._config.get("embedder_model", "text-embedding-kalm-embedding-gemma3-12b-2511-i1"),
+                                "lmstudio_base_url": self._config.get("llm_base_url", "http://localhost:1234/v1"),
+                                # Key names from skill doc - embedding_dims at top level of config
+                            }
+                        },
+                        # Handle both naming conventions for dimensions
+                    }
+                    
+                    # Add dimensions to both locations (handles different mem0 versions)
+                    if embedder_dims:
+                        config["embedder"]["config"]["embedding_dims"] = embedder_dims
+                        # Default to HERMES_HOME/mem0_vectors if not set
+                    default_vector_path = str(Path(get_hermes_home()) / "mem0_vectors")
+
+                    config["vector_store"] = {
+                        "provider": self._config.get("vector_store_provider", "faiss"),
+                        "config": {
+                            "path": self._config.get("vector_store_path") or default_vector_path,
+                            # Key name from skill doc
+                            "embedding_model_dims": embedder_dims,
+                        }
+                    }
+
+                    openai_key = os.environ.get("OPENAI_API_KEY")
+                    if not openai_key and self._config.get("llm_provider") == "openai":
+                        logger.warning("Local mode with openai provider but no OPENAI_API_KEY set")
+                    
+                    logger.info(f"Mem0 local mode: llm={config['llm']['provider']}/{config['llm']['config'].get('model')}, embedder={config['embedder']['provider']}/{config['embedder']['config'].get('model')}")
+                    
+                    self._client = Memory.from_config(config)
+                else:
+                    # Platform mode
+                    from mem0 import MemoryClient
+                    if not self._api_key:
+                        raise RuntimeError("MEM0_API_KEY required for platform mode")
+                    self._client = MemoryClient(api_key=self._api_key)
+                    
                 return self._client
-            except ImportError:
-                raise RuntimeError("mem0 package not installed. Run: pip install mem0ai")
+                
+            except ImportError as e:
+                logger.error(f"Failed to import mem0 package: {e}")
+                if "Memory.from_config" in str(e):
+                    raise RuntimeError("mem0ai package version too old for local mode. Run: uv pip install --upgrade mem0ai")
+                raise RuntimeError("mem0 package not installed. Run: uv pip install mem0ai")
 
     def _is_breaker_open(self) -> bool:
         """Return True if the circuit breaker is tripped (too many failures)."""
@@ -206,6 +318,13 @@ class Mem0MemoryProvider(MemoryProvider):
         self._user_id = self._config.get("user_id", "hermes-user")
         self._agent_id = self._config.get("agent_id", "hermes")
         self._rerank = self._config.get("rerank", True)
+        
+        # Detect mode - check config first, then env var
+        cfg_mode = self._config.get("mode", "").lower()
+        env_mode = os.environ.get("MEM0_MODE", "").lower()
+        self._mode = cfg_mode or env_mode or "platform"
+        
+        logger.info(f"Mem0 initializing in {self._mode} mode")
 
     def _read_filters(self) -> Dict[str, Any]:
         """Filters for search/get_all — scoped to user only for cross-session recall."""
@@ -249,16 +368,21 @@ class Mem0MemoryProvider(MemoryProvider):
         def _run():
             try:
                 client = self._get_client()
-                results = self._unwrap_results(client.search(
+                # Platform uses filters+top_k, OSS uses user_id+limit
+                search_kwargs = dict(
                     query=query,
-                    filters=self._read_filters(),
+                    user_id=self._user_id,
                     rerank=self._rerank,
-                    top_k=5,
-                ))
+                    limit=5,
+                )
+                if self._mode != "local":
+                    search_kwargs.update(filters=self._read_filters(), top_k=5)
+                
+                results = self._unwrap_results(client.search(**search_kwargs))
                 if results:
                     lines = [r.get("memory", "") for r in results if r.get("memory")]
                     with self._prefetch_lock:
-                        self._prefetch_result = "\n".join(f"- {l}" for l in lines)
+                        self._prefetch_result = "\n".join(f"- {line}" for line in lines)
                 self._record_success()
             except Exception as e:
                 self._record_failure()
@@ -279,7 +403,8 @@ class Mem0MemoryProvider(MemoryProvider):
                     {"role": "user", "content": user_content},
                     {"role": "assistant", "content": assistant_content},
                 ]
-                client.add(messages, **self._write_filters())
+                # Pass both platform and OSS style - each client takes what it needs
+                client.add(messages, **self._write_filters(), infer=True)
                 self._record_success()
             except Exception as e:
                 self._record_failure()
@@ -308,7 +433,15 @@ class Mem0MemoryProvider(MemoryProvider):
 
         if tool_name == "mem0_profile":
             try:
-                memories = self._unwrap_results(client.get_all(filters=self._read_filters()))
+                # Platform uses filters, OSS uses user_id+limit - pass both
+                get_all_kwargs = dict(
+                    user_id=self._user_id,
+                    limit=100,
+                )
+                if self._mode != "local":
+                    get_all_kwargs["filters"] = self._read_filters()
+                
+                memories = self._unwrap_results(client.get_all(**get_all_kwargs))
                 self._record_success()
                 if not memories:
                     return json.dumps({"result": "No memories stored yet."})
@@ -323,14 +456,20 @@ class Mem0MemoryProvider(MemoryProvider):
             if not query:
                 return json.dumps({"error": "Missing required parameter: query"})
             rerank = args.get("rerank", False)
-            top_k = min(int(args.get("top_k", 10)), 50)
+            limit = min(int(args.get("top_k", 10)), 50)
             try:
-                results = self._unwrap_results(client.search(
+                # Platform uses filters+top_k, OSS uses user_id+limit - pass both, each takes what it needs
+                search_kwargs = dict(
                     query=query,
-                    filters=self._read_filters(),
+                    user_id=self._user_id,
                     rerank=rerank,
-                    top_k=top_k,
-                ))
+                    limit=limit,
+                )
+                if self._mode != "local":
+                    # Platform mode also wants filters and top_k (OSS rejects these)
+                    search_kwargs.update(filters=self._read_filters(), top_k=limit)
+                
+                results = self._unwrap_results(client.search(**search_kwargs))
                 self._record_success()
                 if not results:
                     return json.dumps({"result": "No relevant memories found."})

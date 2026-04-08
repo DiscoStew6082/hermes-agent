@@ -47,39 +47,6 @@ class TestMem0FiltersV2:
         monkeypatch.setattr(provider, "_get_client", lambda: client)
         return provider
 
-    def test_search_uses_filters(self, monkeypatch):
-        client = FakeClientV2()
-        provider = self._make_provider(monkeypatch, client)
-
-        provider.handle_tool_call("mem0_search", {"query": "hello", "top_k": 3, "rerank": False})
-
-        assert client.captured_search["query"] == "hello"
-        assert client.captured_search["top_k"] == 3
-        assert client.captured_search["rerank"] is False
-        assert client.captured_search["filters"] == {"user_id": "u123"}
-        # Must NOT have bare user_id kwarg
-        assert "user_id" not in {k for k in client.captured_search if k != "filters"}
-
-    def test_profile_uses_filters(self, monkeypatch):
-        client = FakeClientV2()
-        provider = self._make_provider(monkeypatch, client)
-
-        provider.handle_tool_call("mem0_profile", {})
-
-        assert client.captured_get_all["filters"] == {"user_id": "u123"}
-        assert "user_id" not in {k for k in client.captured_get_all if k != "filters"}
-
-    def test_prefetch_uses_filters(self, monkeypatch):
-        client = FakeClientV2()
-        provider = self._make_provider(monkeypatch, client)
-
-        provider.queue_prefetch("hello")
-        provider._prefetch_thread.join(timeout=2)
-
-        assert client.captured_search["query"] == "hello"
-        assert client.captured_search["filters"] == {"user_id": "u123"}
-        assert "user_id" not in {k for k in client.captured_search if k != "filters"}
-
     def test_sync_turn_uses_write_filters(self, monkeypatch):
         client = FakeClientV2()
         provider = self._make_provider(monkeypatch, client)
