@@ -60,3 +60,6 @@ mini-swe-agent/
 result
 .DS_Store
 **/.DS_Store
+
+# IDE / editor folders
+.qwen/
