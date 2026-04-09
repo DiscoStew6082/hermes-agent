@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//Users/stewart/.hermes/**)"
+    ]
+  },
+  "$version": 3
+}
