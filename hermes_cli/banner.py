@@ -465,10 +465,17 @@ def build_welcome_banner(console: Console, model: str, cwd: str,
                     f"[dim {dim}]{srv['name']}[/] [{text}]({srv['transport']})[/] "
                     f"[dim {dim}]—[/] [{text}]{srv['tools']} tool(s)[/]"
                 )
-            else:
+            elif srv.get("error"):
+                # Real connection failure
                 right_lines.append(
                     f"[red]{srv['name']}[/] [dim]({srv['transport']})[/] "
-                    f"[red]— failed[/]"
+                    f"[red]— {srv['error'][:20]}[/]"
+                )
+            else:
+                # Not yet connected (no agent run) - show as pending, not failed
+                right_lines.append(
+                    f"[dim]{srv['name']}[/] [dim]({srv['transport']})[/] "
+                    f"[yellow]— pending[/]"
                 )
 
     right_lines.append("")

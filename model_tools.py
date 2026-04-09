@@ -301,6 +301,24 @@ def get_tool_definitions(
     # Ask the registry for schemas (only returns tools whose check_fn passes)
     filtered_tools = registry.get_definitions(tools_to_include, quiet=quiet_mode)
 
+    # If any MCP server provides web_search or web_fetch tools, prefer those over
+    # the built-in web_search/web_extract to get cleaner results (avoids HTML/JS noise).
+    mcp_has_web = False
+    for tool in filtered_tools:
+        name = tool.get("function", {}).get("name", "")
+        if name.startswith("mcp_") and ("web_search" in name or "web_fetch" in name):
+            mcp_has_web = True
+            break
+
+    if mcp_has_web:
+        # Filter out built-in web tools in favor of MCP versions for cleaner results
+        filtered_tools = [
+            t for t in filtered_tools
+            if t.get("function", {}).get("name") not in ("web_search", "web_extract")
+        ]
+        if not quiet_mode:
+            print("🔍 Using MCP web search (filtered built-in web_search/web_extract)")
+
     # The set of tool names that actually passed check_fn filtering.
     # Use this (not tools_to_include) for any downstream schema that references
     # other tools by name — otherwise the model sees tools mentioned in
