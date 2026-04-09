@@ -328,6 +328,13 @@ def load_cli_config() -> Dict[str, Any]:
                     if "model" in file_config["model"] and "default" not in file_config["model"]:
                         defaults["model"]["default"] = file_config["model"]["model"]
 
+            # Handle compression config - must merge nested values, not just top-level.
+            # The default dict has "compression": {"threshold": 0.50}, but we need
+            # to respect user's config.yaml settings (e.g., threshold: 0.75).
+            if "compression" in file_config:
+                if isinstance(file_config["compression"], dict):
+                    defaults["compression"].update(file_config["compression"])
+
             # Legacy root-level provider/base_url fallback.
             # Some users (or old code) put provider: / base_url: at the
             # config root instead of inside the model: section.  These are
