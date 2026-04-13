@@ -35,7 +35,6 @@ Usage:
     hermes honcho identity <file>          # Seed AI peer identity from a file (SOUL.md etc.)
     hermes honcho migrate                  # Step-by-step migration guide: OpenClaw native → Hermes + Honcho
     hermes version             Show version
-    hermes update              Update to latest version
     hermes uninstall           Uninstall Hermes Agent
     hermes acp                 Run as an ACP server for editor integration
     hermes sessions browse     Interactive session picker with search
@@ -3888,8 +3887,8 @@ def _coalesce_session_name_args(argv: list) -> list:
     _SUBCOMMANDS = {
         "chat", "model", "gateway", "setup", "whatsapp", "login", "logout", "auth",
         "status", "cron", "doctor", "config", "pairing", "skills", "tools",
-        "mcp", "sessions", "insights", "version", "update", "uninstall",
-        "profile",
+        "mcp", "sessions", "insights", "version", "uninstall",
+        "profile", "dashboard",
     }
     _SESSION_FLAGS = {"-c", "--continue", "-r", "--resume"}
 
@@ -5437,20 +5436,6 @@ For more help on a command:
         help="Show version information"
     )
     version_parser.set_defaults(func=cmd_version)
-    
-    # =========================================================================
-    # update command
-    # =========================================================================
-    update_parser = subparsers.add_parser(
-        "update",
-        help="Update Hermes Agent to the latest version",
-        description="Pull the latest changes from git and reinstall dependencies"
-    )
-    update_parser.add_argument(
-        "--gateway", action="store_true", default=False,
-        help="Gateway mode: use file-based IPC for prompts instead of stdin (used internally by /update)"
-    )
-    update_parser.set_defaults(func=cmd_update)
     
     # =========================================================================
     # uninstall command
