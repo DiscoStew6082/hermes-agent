@@ -1488,14 +1488,11 @@ def _profile_home(profile: str | None) -> Path | None:
         from hermes_cli import profiles as profiles_mod
 
         canon = profiles_mod.normalize_profile_name(name)
-        # normalize_profile_name lowercases but does NOT reject path
-        # components, and ``profiles/..`` resolves to the deploy root — which
-        # the own-profile check below would misclassify as the launch profile.
-        # Validate the NORMALIZED name before touching the filesystem.
-        if canon != "default" and (
-            canon in (".", "..") or "/" in canon or "\\" in canon or os.sep in canon
-        ):
-            raise ValueError("invalid profile name")
+        # normalize_profile_name lowercases but does NOT validate the profile
+        # identifier. Validate the canonical name before constructing a path:
+        # besides traversal components, this rejects Windows drive-relative
+        # forms such as ``d:`` and ``c:alpha`` that contain no path separator.
+        profiles_mod.validate_profile_name(canon)
         home = Path(profiles_mod.get_profile_dir(canon))
         # Already the launch profile? No override needed.
         if home.resolve() == Path(_hermes_home).resolve():

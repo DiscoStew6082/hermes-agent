@@ -18435,6 +18435,40 @@ def test_unknown_profile_message_echoes_only_client_string(monkeypatch, tmp_path
     assert "profiles" not in resp["error"]["message"]
 
 
+@pytest.mark.parametrize("name", ["c:alpha", "d:"])
+def test_invalid_windows_drive_profile_rejected_before_path_construction(
+    monkeypatch, tmp_path, name
+):
+    """Windows drive-qualified names are not profile identifiers.
+
+    ``Path(profiles_root) / "c:alpha"`` aliases ``profiles_root / "alpha"``
+    on drive C, while ``"d:"`` is drive-relative and can escape the profiles
+    root. Reject both before asking the profile module to construct any path.
+    """
+    _setup_synthetic_profiles_c2(monkeypatch, tmp_path, present=("alpha",))
+    from hermes_cli import profiles as profiles_mod
+
+    constructed = []
+    original_get_profile_dir = profiles_mod.get_profile_dir
+
+    def _record_get_profile_dir(profile_name):
+        constructed.append(profile_name)
+        return original_get_profile_dir(profile_name)
+
+    monkeypatch.setattr(profiles_mod, "get_profile_dir", _record_get_profile_dir)
+
+    with pytest.raises(server._UnknownProfileError):
+        server._profile_home(name)
+    assert constructed == []
+
+    resp = server.handle_request(
+        {"id": "win-drive", "method": "session.list", "params": {"profile": name}}
+    )
+    assert resp["error"]["code"] == 4028
+    assert resp["error"]["message"] == _C2_MSG.format(name=name)
+    assert constructed == []
+
+
 def test_session_resume_omitted_profile_uses_launch(monkeypatch, tmp_path):
     """Omitted profile keeps launch behavior: the launch db is consulted and the
     normal 'session not found' is returned (never a 4028)."""
